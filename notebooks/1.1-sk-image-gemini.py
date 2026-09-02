@@ -4,14 +4,8 @@ sys.path.append("..")  # Adjust the path to include the parent directory
 # %%
 import json
 import pandas as pd
+import pandas_gbq as pdq
 from datetime import datetime as dt
-
-# from google.adk.tools.agent_tool import AgentTool
-# from google.adk.tools import ToolContext
-
-# from googleapiclient.discovery import build
-# from google.oauth2.service_account import Credentials
-# from google.cloud.secretmanager import SecretManagerServiceClient
 
 from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
@@ -19,7 +13,7 @@ from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from google.genai import Client, types
 
 # from .sub_agents import db_agent
-from utils import env
+from pipelines.utils import env
 # %%
 llm_client = Client(vertexai=True, project=env.PROJECT, location=env.LOCATION)
 google_search_tool = Tool(google_search = GoogleSearch())
@@ -122,7 +116,7 @@ class BisselOutput(BaseModel):
     )
 # %%
 prompt = """
-Analyze the video_description of the ad and classify the type of asset used in the ad creative.
+Analyze the image of the ad and classify the type of asset used in the ad creative.
 
 1. Asset type can be one of the following:
    - Product Only: when shot in a plain background
@@ -250,31 +244,53 @@ Analyze the video_description of the ad and classify the type of asset used in t
 18. If headline or subtitle text is present, extract it.
 
 """
-
 # %%
-from google.genai.types import Part
-import os
-predlist = []
-imgs = [u.split('.')[0] for u in os.listdir('../data/images') if u.endswith('.jpg') or u.endswith('.jpeg')]
-for img in imgs:
-    img_path = f'../data/images/{img}.jpeg'
-    image = Part.from_bytes(data=open(img_path, "rb").read(), mime_type="image/jpeg",)
-
-    response = llm_client.models.generate_content(
-        model=env.MODEL, contents=[image, prompt],
-        config=GenerateContentConfig(
-            # tools=[google_search_tool],
-            response_mime_type="application/json",
-            response_schema=BisselOutput
-        )
-    )
-    predf = pd.json_normalize(response.to_json_dict()['parsed'])
-    predlist += [predf]
+project = env.PROJECT
+client_project = env.CLIENT_PROJECT
+optics_dataset = env.OPTICS_DATASET
+creative_type = "image"
+channel = "meta"
 # %%
-preddf = pd.concat(predlist, ignore_index=True)
-preddf.insert(0, 'image_hash', imgs)
-preddf['created_at'] = dt.now().strftime('%Y-%m-%d %H:%M:%S')
-preddf
+sql = f"""
+    SELECT DISTINCT a.image_hash, a.gs_path
+    FROM `{client_project}.{optics_dataset}.{channel}_{creative_type}_data` AS a
+    LEFT JOIN `{client_project}.{optics_dataset}.{channel}_{creative_type}_predictions` AS b
+    ON a.image_hash = b.image_hash
+    WHERE b.image_hash IS NULL
+"""
+actdf = pdq.read_gbq(sql, project_id=project, use_bqstorage_api=True)
+actdf
+# %%
+predlist = []    
+for idx, row in actdf.iterrows():
+    image_hash = row['image_hash']
+    try:
+        asset = types.Part.from_uri(file_uri=row['gs_path'])
+        response = llm_client.models.generate_content(
+                model=env.MODEL, contents=[asset, prompt],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    response_schema=BisselOutput,
+                )
+            )
+        predf = pd.json_normalize(response.to_json_dict()['parsed'])
+        predf = predf.assign(image_hash=image_hash)
+        predlist += [predf]
+
+    except Exception as e:
+        print(f"Error processing {creative_type} {image_hash}: {e}")
+        continue
+
+preddf_new = pd.concat(predlist, ignore_index=True)
+# %%
+preddf_new['created_at'] = dt.now().strftime('%Y-%m-%d %H:%M:%S')
+preddf_new
+# %%
+sql = f"""
+    SELECT * FROM `{client_project}.{optics_dataset}.{channel}_{creative_type}_predictions`
+"""
+preddf_old = pdq.read_gbq(sql, project_id=project, use_bqstorage_api=True)
+preddf = pd.concat([preddf_old, preddf_new], ignore_index=True)
 # %%
 import pandas_gbq as pdq
 project='rp-tech-bissell-prod'

@@ -4,14 +4,8 @@ sys.path.append("..")  # Adjust the path to include the parent directory
 # %%
 import json
 import pandas as pd
+import pandas_gbq as pdq
 from datetime import datetime as dt
-
-# from google.adk.tools.agent_tool import AgentTool
-# from google.adk.tools import ToolContext
-
-# from googleapiclient.discovery import build
-# from google.oauth2.service_account import Credentials
-# from google.cloud.secretmanager import SecretManagerServiceClient
 
 from typing import Literal, Optional, List
 from pydantic import BaseModel, Field
@@ -19,7 +13,7 @@ from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 from google.genai import Client, types
 
 # from .sub_agents import db_agent
-from utils import env
+from pipelines.utils import env
 # %%
 llm_client = Client(vertexai=True, project=env.PROJECT, location=env.LOCATION)
 google_search_tool = Tool(google_search = GoogleSearch())
@@ -59,38 +53,100 @@ Please be as thorough and precise as possible in your descriptions and transcrip
 
 """
 # %%
-import os
-from google.genai.types import Part
-video_text = []
-videos = [u.split('.')[0] for u in os.listdir('../data/videos') if u.endswith('.mp4')]
-for video_id in videos[:10]:
-    video_path = f'../data/videos/{video_id}.mp4'
-    video_bytes = Part.from_bytes(
-        data=open(video_path, 'rb').read(),
-        mime_type="video/mp4",
-    )
-
-    response = llm_client.models.generate_content(
-        model=env.MODEL, contents=[video_bytes, prompt],
-        config=GenerateContentConfig(
-        )
-    )
-    video_text += [(video_id, response.text)]
+project = env.PROJECT
+client_project = env.CLIENT_PROJECT
+optics_dataset = env.OPTICS_DATASET
+creative_type = "video"
+channel = "meta"
 # %%
-video_textdf = pd.DataFrame(video_text, columns=['video_id', 'video_description'])
-video_textdf
+sql = f"""
+    SELECT DISTINCT a.video_id, a.gs_path
+    FROM `{client_project}.{optics_dataset}.{channel}_{creative_type}_data` AS a
+    LEFT JOIN `{client_project}.{optics_dataset}.{channel}_{creative_type}_predictions` AS b
+    ON a.video_id = b.video_id
+    WHERE b.video_id IS NULL
+"""
+actdf = pdq.read_gbq(sql, project_id=project, use_bqstorage_api=True)
+actdf
+# %%
+video_text = []    
+for idx, row in actdf.iterrows():
+    video_id = row['video_id']
+    print(f"Processing {creative_type} {video_id}...")
+    try:
+        asset = types.Part.from_uri(file_uri=row['gs_path'])
+        response = llm_client.models.generate_content(
+                model=env.MODEL, contents=[asset, prompt],
+                config=types.GenerateContentConfig(
+                )
+            )
+        response = llm_client.models.generate_content(
+            model=env.MODEL, contents=[asset, prompt],
+            config=GenerateContentConfig()
+        )
+        video_text += [(video_id, response.text)]
+
+    except Exception as e:
+        print(f"Error processing {creative_type} {video_id}: {e}")
+        continue
+
+# %%
+new_textdf = pd.DataFrame(video_text, columns=['video_id', 'video_description'])
+# %%
+new_textdf
 # %%
 import pandas_gbq as pdq
 project='rp-tech-bissell-prod'
 database='optics'
 table='meta_video_descriptions'
 
+old_textdf = pdq.read_gbq(
+    f'SELECT * FROM `{project}.{database}.{table}`',
+    project_id=project,
+    use_bqstorage_api=True
+)
+old_textdf
+# %%
+video_textdf = old_textdf.groupby('video_id').agg({'video_description': 'first'}).reset_index()
+video_textdf
+# %%
+video_textdf = pd.concat([old_textdf, new_textdf], ignore_index=True)
+video_textdf
+# %%
 pdq.to_gbq(
     video_textdf,
     destination_table=f'{project}.{database}.{table}',
     project_id=project,
     if_exists='replace',
 )
+# %%
+# sql = f"""
+#     SELECT * FROM `{client_project}.{optics_dataset}.{channel}_{creative_type}_predictions`
+# """
+# preddf_old = pdq.read_gbq(sql, project_id=project, use_bqstorage_api=True)
+# preddf = pd.concat([preddf_old, preddf_new], ignore_index=True)
+# # %%
+# import os
+# from google.genai.types import Part
+# video_text = []
+# videos = [u.split('.')[0] for u in os.listdir('../data/videos') if u.endswith('.mp4')]
+# for video_id in videos[:10]:
+#     video_path = f'../data/videos/{video_id}.mp4'
+#     video_bytes = Part.from_bytes(
+#         data=open(video_path, 'rb').read(),
+#         mime_type="video/mp4",
+#     )
+
+#     response = llm_client.models.generate_content(
+#         model=env.MODEL, contents=[video_bytes, prompt],
+#         config=GenerateContentConfig(
+#         )
+#     )
+#     video_text += [(video_id, response.text)]
+# # %%
+# video_textdf = pd.DataFrame(video_text, columns=['video_id', 'video_description'])
+# video_textdf
+
 # %%
 class BisselOutput(BaseModel):
     asset_type: List[Literal["Product Only", "Lifestyle", "Infographic", "User-Generated"]] = Field(
@@ -318,12 +374,27 @@ Analyze the video_description of the ad and classify the type of asset used in t
 18. If headline or subtitle text is present, extract it.
 
 """
-
 # %%
-from google.genai.types import Part
+project='rp-tech-bissell-prod'
+database='optics'
+table='meta_video_predictions'
+
+old_preddf = pdq.read_gbq(
+    f'SELECT * FROM `{project}.{database}.{table}`',
+    project_id=project,
+    use_bqstorage_api=True
+)
+old_preddf
+# %%
+cols = old_preddf.columns[1:]
+preddf = old_preddf.groupby('video_id').agg({col: 'first' for col in cols}).reset_index()
+preddf
+# %%
 predlist = []
 for i, row in video_textdf.iterrows():
     video_id = row['video_id']
+    if row['video_id'] in old_preddf['video_id'].values: continue
+    print(f"Processing {creative_type} {video_id}...")
     video_description = row['video_description']
     response = llm_client.models.generate_content(
         model=env.MODEL, contents=[prompt, video_description],
@@ -334,18 +405,16 @@ for i, row in video_textdf.iterrows():
         )
     )
     predf = pd.json_normalize(response.to_json_dict()['parsed'])
-    predlist += [predf]
+    predlist += [predf.assign(video_id=video_id)]
 # %%
-preddf = pd.concat(predlist, ignore_index=True)
-preddf.insert(0, 'video_id', video_textdf['video_id'])
-preddf['created_at'] = dt.now().strftime('%Y-%m-%d %H:%M:%S')
-preddf
-# %%
-import pandas_gbq as pdq
-project='rp-tech-bissell-prod'
-database='optics'
-table='meta_video_predictions'
+new_preddf = pd.concat(predlist, ignore_index=True)
+new_preddf['created_at'] = dt.now().strftime('%Y-%m-%d %H:%M:%S')
+new_preddf
 
+# %%
+preddf = pd.concat([old_preddf, new_preddf], ignore_index=True)
+preddf.shape
+# %%
 pdq.to_gbq(
     preddf,
     destination_table=f'{project}.{database}.{table}',

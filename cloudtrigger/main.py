@@ -17,17 +17,16 @@ def local_run(args: List[str] = None) -> aip.PipelineJob:
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--platform", help="Platform to run the pipeline on", type=str, default="local")
-    parser.add_argument("--enable_caching", type=str, default=None)
+    parser.add_argument("--enable_caching", type=str, default="False")
     
     # Get commandline args
     args = parser.parse_args(args)
 
-    # If empty value for enable_caching provided on commandline default to None
-    if args.enable_caching == "": args.enable_caching = None
-
+    caching = args.enable_caching == "True"
+    print(f"running pipeline on {args.platform} with caching={caching}")
     return trigger_pipeline(platform=args.platform,
                             pipeline_template_path=f"build/{args.platform}_pipeline.json",
-                            enable_caching=args.enable_caching,)
+                            enable_caching=caching)
 
 
 def trigger_pipeline(

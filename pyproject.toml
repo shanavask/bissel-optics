@@ -6,12 +6,15 @@ authors = [
     {name = "Shanavas Kavu", email = "shanavas.kavu@jellyfish.com"},
 ]
 dependencies = [
-    "google-cloud-logging~=3.11.4",
-    "google-cloud-aiplatform~=1.100.0",
-    "pandas-gbq~=0.29.2",
-    "google-cloud-bigquery-storage~=2.32.0",
-    "kfp~=2.13.0",
-    "pillow~=11.3.0"
+    "google-cloud-logging>=3.11.4",
+    "google-cloud-aiplatform>=1.100.0",
+    "pandas-gbq>=0.29.2",
+    "google-cloud-bigquery-storage>=2.32.0",
+    "kfp>=2.13.0",
+    "pillow>=11.3.0",
+    "moviepy>=2.2.1",
+    "yt-dlp>=2026.7.4",
+    "facebook-business>=26.0.1",
 ]
 
 requires-python = ">=3.10,<3.13"

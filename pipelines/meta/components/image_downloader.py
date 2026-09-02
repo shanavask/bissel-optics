@@ -2,8 +2,8 @@ from kfp import dsl
 
 @dsl.component(
         base_image="python:3.12", 
-        packages_to_install=["google-cloud-logging==3.11.4", "google-cloud-aiplatform==1.100.0",
-            "pandas-gbq==0.29.2", "google-cloud-bigquery-storage==2.32.0", "kfp==2.13.0",
+        packages_to_install=["google-cloud-logging==3.16.1", "google-cloud-aiplatform==1.160.0",
+            "pandas-gbq==0.35.0", "google-cloud-bigquery-storage==2.39.0", "kfp==2.17.0",
             "pillow==11.3.0"])
 def download_images(
     meta_table: str,
@@ -61,6 +61,7 @@ def download_images(
     prefix_url = f'https://storage.cloud.google.com/{storage_bucket}/'
 
     done_imgs, imagelist = [], []
+    down_imgs = [u.name for u in bucket.list_blobs(prefix=f'{meta_img_path}') if not u.name.endswith('/')]
     for i, row in actdf.iterrows():    
         img_url = row['image_url']
         img_hash = row['image_hash']
@@ -70,7 +71,7 @@ def download_images(
             img_data = requests.get(img_url).content
             file_type = imghdr.what(None, img_data)
             blob = bucket.blob(f'{meta_img_path}/{img_hash}.{file_type}')
-            if not blob.exists(): blob.upload_from_string(img_data)
+            if not blob.name in down_imgs: blob.upload_from_string(img_data)
             done_imgs.append(img_hash)
 
             image = Image.open(BytesIO(img_data))
@@ -79,7 +80,7 @@ def download_images(
             image.save(buffer, format="JPEG")
             img_path = f"{meta_img_path}/thumbnails/{img_hash}.jpeg"
             oblob = bucket.blob(img_path)
-            if not oblob.exists(): oblob.upload_from_string(buffer.getvalue())
+            if not oblob.name in down_imgs: oblob.upload_from_string(buffer.getvalue())
 
             logging.info(f'{i}: downloaded: {img_hash}')
             gs_path = f'gs://{storage_bucket}/{meta_img_path}/{img_hash}.{file_type}'
@@ -96,7 +97,7 @@ def download_images(
         imgdf['downloaded_at'] = dt.now().strftime('%Y-%m-%d %H:%M:%S')
         pdq.to_gbq(imgdf,
             destination_table=f'{client_project}.{optics_dataset}.{meta_image_table}',
-            project_id=project, if_exists='replace',
+            project_id=project, if_exists='append',
         )
 
     return 'success'
