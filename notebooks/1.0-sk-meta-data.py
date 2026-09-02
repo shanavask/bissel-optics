@@ -42,16 +42,16 @@ sql = f"""
     SELECT *
     FROM `{client_project}.{client_dataset}.{meta_table}`
     WHERE Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
-    AND Date>"2026-01-01"
+    AND Date="2026-09-01"
     """
-sql = f"""
-    SELECT * 
-    FROM `jf-tech-investanalytics-prod.funnel_export_bissell.funnel_usa_ad_level_no_ga_meta_creative`
-    WHERE Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
-    # AND Date>"2026-01-01"
-    LIMIT 100
-#    AND Ad_Creative_Video_ID__Facebook_Ads='1034273606045256'
-    """
+# sql = f"""
+#     SELECT * 
+#     FROM `jf-tech-investanalytics-prod.funnel_export_bissell.funnel_usa_ad_level_no_ga_meta_creative`
+#     WHERE Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
+#     # AND Date>"2026-01-01"
+#     LIMIT 100
+# #    AND Ad_Creative_Video_ID__Facebook_Ads='1034273606045256'
+    # """
 actdf = pdq.read_gbq(sql,
     project_id=project,
     use_bqstorage_api=True,)
@@ -81,8 +81,8 @@ fields = ['campaign_id', 'ad_id', 'impressions', 'clicks', 'spend', 'reach']
 columns = ['account_id', 'date_start', 'date_stop']+fields
 
 account_id = '2409630422470729'
-a_dt = '2026-02-12'
-b_dt = '2026-02-13'
+a_dt = '2026-09-01'
+b_dt = '2026-09-01'
 params = {
     'time_range': {'since': a_dt,'until': b_dt},
     'level': 'ad',
@@ -121,7 +121,7 @@ createlist = []
 from time import sleep
 # for x, row in datadf.iterrows():
 try:
-    ad = Ad(fbid=120252386073480577)
+    ad = Ad(fbid=120244205546900577)
     # ad = Ad(fbid=row['ad_id'])
     creatives = ad.get_ad_creatives(fields=fields)
     creatdic = [dict(x) for x in creatives]
@@ -142,6 +142,16 @@ except Exception as e:
     print(e)
 # %%
 creatdic
+# %%
+createdf = pd.concat(createlist)
+createdf
+# %%
+a = createdf['object_story_spec.video_data.video_id'].unique()
+# %%
+b = actdf['Ad_Creative_Video_ID__Facebook_Ads'].unique()
+b
+# %%
+len([u for u in b if u in a])
 # %%
 # Find the ad_id that actually references video 1728857971690773, then pull
 # its creative directly to compare object_story_spec.video_data.video_id
@@ -187,7 +197,7 @@ fields = [
         # "views", "thumbnails", "created_time", "permalink_url"
     ]
 
-video_id = "1728857971690773"
+video_id = "1090272550313091"
 video = AdVideo(video_id)
 videodata = video.api_get(fields=fields)
 videodata
