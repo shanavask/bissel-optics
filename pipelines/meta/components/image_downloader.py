@@ -45,7 +45,7 @@ def download_images(
             Ad_Creative_Image_Permalink_URL__Facebook_Ads AS image_url
         FROM `{client_project}.{client_dataset}.{meta_table}`
         LEFT JOIN `{client_project}.{optics_dataset}.{meta_image_table}` AS meta
-        ON meta.image_hash = Ad_Creative_Image_Hash__Facebook_Ads
+        ON meta.image_hash = Ad_Creative_Image_Hash__Facebook_Ads AND meta.creative_id = Creative_ID__Facebook_Ads
         WHERE meta.image_hash IS NULL
         AND Ad_Creative_Image_Hash__Facebook_Ads IS NOT NULL
         AND Ad_Creative_Image_Permalink_URL__Facebook_Ads IS NOT NULL

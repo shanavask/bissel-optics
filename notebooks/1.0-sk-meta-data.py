@@ -29,35 +29,45 @@ channel = "meta"
 access_token = env.META_TOKEN
 # %%
 sql = f"""
-    SELECT *
+        SELECT DISTINCT Creative_ID__Facebook_Ads AS creative_id, Ad_Creative_Video_ID__Facebook_Ads AS video_id,
+             Ad_Creative_Video_Permalink_URL__Facebook_Ads AS video_url
     FROM `{client_project}.{client_dataset}.{meta_table}`
-    # LEFT JOIN `{client_project}.{optics_dataset}.{meta_video_table}` AS meta
-    # ON meta.video_id = Ad_Creative_Video_ID__Facebook_Ads
-    # WHERE meta.video_id IS NOT NULL
-    # AND Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
-    # AND Ad_Creative_Video_Permalink_URL__Facebook_Ads IS NOT NULL
-    LIMIT 100
+    LEFT JOIN `{client_project}.{optics_dataset}.{meta_video_table}` AS meta
+    ON meta.video_id = Ad_Creative_Video_ID__Facebook_Ads AND meta.creative_id = Creative_ID__Facebook_Ads
+    WHERE meta.video_id IS NULL
+    AND Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
+    AND Ad_Creative_Video_Permalink_URL__Facebook_Ads IS NOT NULL
+    AND Creative_ID__Facebook_Ads = '28400094959686989'
+    AND Ad_Creative_Video_ID__Facebook_Ads = '2711635195869392'
     """
-sql = f"""
-    SELECT *
-    FROM `{client_project}.{client_dataset}.{meta_table}`
-    WHERE Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
-    AND Date="2026-09-01"
-    """
-# sql = f"""
-#     SELECT * 
-#     FROM `jf-tech-investanalytics-prod.funnel_export_bissell.funnel_usa_ad_level_no_ga_meta_creative`
-#     WHERE Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
-#     # AND Date>"2026-01-01"
-#     LIMIT 100
-# #    AND Ad_Creative_Video_ID__Facebook_Ads='1034273606045256'
-    # """
 actdf = pdq.read_gbq(sql,
     project_id=project,
     use_bqstorage_api=True,)
 actdf
 # %%
-actdf
+sql = f"""
+        SELECT *
+        FROM `{client_project}.{optics_dataset}.{channel}_{creative_type}_predictions` AS b
+        WHERE b.video_id = '2711635195869392'"""
+df = pdq.read_gbq(sql,
+    project_id=project,
+    use_bqstorage_api=True,)
+df
+# %%
+sql = f"""
+        SELECT *
+        FROM `{client_project}.{optics_dataset}.{meta_video_table}`
+        WHERE video_id = '2711635195869392'"""
+df = pdq.read_gbq(sql,
+    project_id=project,
+    use_bqstorage_api=True,)
+df
+# %%
+df.iloc[0]['thumbnail_url']
+# %%
+actdf[actdf['creative_id']=='1362029502553046']
+# %%
+actdf['Ad_Creative_Video_Permalink_URL__Facebook_Ads'].unique()
 # %%
 actdf[actdf['Creative_ID__Facebook_Ads'].str.contains('625591193813695')]
 # %%
@@ -68,7 +78,7 @@ errors_df = pdq.read_gbq(
         )
 errors_df
 # %%
-actdf['Date']
+errors_df[errors_df['video_id'].str.contains('2711635195869392')]
 # %%
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.adobjects.advideo import AdVideo
@@ -172,7 +182,7 @@ for c in video_creatives:
 # (a Reel), not an ad-account-owned video. Fetch the post itself to confirm -
 # this needs Page-level permission (pages_read_engagement / page access on
 # 38870020038), separate from ads_read on the ad account.
-effective_story_id = '38870020038_1654041703429381'
+effective_story_id = '38870020038_1645718850928333'
 api = FacebookAdsApi.get_default_api()
 post_response = api.call(
     'GET',
@@ -193,14 +203,47 @@ createdf['object_story_spec.template_data.child_attachments'].iloc[0]
 createdf.columns
 # %%
 fields = [
-        "id", #"title", #"description", "source", "length",
-        # "views", "thumbnails", "created_time", "permalink_url"
+        "id", "title", "description", "source", "length",
+        "views", "created_time", "permalink_url",
     ]
 
-video_id = "1090272550313091"
+video_id = "1623093879122294"
 video = AdVideo(video_id)
 videodata = video.api_get(fields=fields)
 videodata
+# %%
+found_account = 'act_2409630422470729'
+vids = AdAccount(found_account).get_ad_videos(fields=['id', 'source', 'permalink_url'], params={'limit': 100})
+# next(v for v in vids if v['id'] == target_video_id)
+# %%
+api = FacebookAdsApi.get_default_api()
+batch = api.new_batch()
+
+results = {}
+def make_callback(acct_id):
+    def cb(response):
+        results[acct_id] = response.json()
+    return cb
+
+for acct in acc_list:
+    acct_id = acct['id']
+    batch.add(
+        method='GET',
+        relative_path=f"{acct_id}/advideos",
+        params={
+            'fields': 'id,source,permalink_url',
+            'filtering': [{'field': 'id', 'operator': 'IN', 'value': [target_video_id]}],
+        },
+        success=make_callback(acct_id),
+    )
+batch.execute()
+
+{k: v for k, v in results.items() if v.get('data')}
+
+
+# %%
+video_url = videodata.get("source")
+video_url
 # %%
 for ix, row in actdf.iterrows():
     if row['Ad_Creative_Video_ID__Facebook_Ads'] is not None:
@@ -297,15 +340,15 @@ sql = f"""
     WHERE meta.video_id IS NULL
     AND Ad_Creative_Video_Permalink_URL__Facebook_Ads IS NOT NULL
     """
-sql = f"""
-        SELECT DISTINCT Creative_ID__Facebook_Ads AS creative_id, Ad_Creative_Image_Hash__Facebook_Ads AS image_hash,
-            Ad_Creative_Image_Permalink_URL__Facebook_Ads AS image_url
-        FROM `{env.CLIENT_PROJECT}.{env.CLIENT_DATASET}.{env.META_TABLE}`
-        LEFT JOIN `{env.CLIENT_PROJECT}.{env.OPTICS_DATASET}.{env.META_IMAGE_TABLE}` AS meta
-        ON meta.image_hash = Ad_Creative_Image_Hash__Facebook_Ads
-        WHERE meta.image_hash IS NULL
-        AND Ad_Creative_Image_Hash__Facebook_Ads IS NOT NULL
-        AND Ad_Creative_Image_Permalink_URL__Facebook_Ads IS NOT NULL"""
+# sql = f"""
+#         SELECT DISTINCT Creative_ID__Facebook_Ads AS creative_id, Ad_Creative_Image_Hash__Facebook_Ads AS image_hash,
+#             Ad_Creative_Image_Permalink_URL__Facebook_Ads AS image_url
+#         FROM `{env.CLIENT_PROJECT}.{env.CLIENT_DATASET}.{env.META_TABLE}`
+#         LEFT JOIN `{env.CLIENT_PROJECT}.{env.OPTICS_DATASET}.{env.META_IMAGE_TABLE}` AS meta
+#         ON meta.image_hash = Ad_Creative_Image_Hash__Facebook_Ads
+#         WHERE meta.image_hash IS NULL
+#         AND Ad_Creative_Image_Hash__Facebook_Ads IS NOT NULL
+#         AND Ad_Creative_Image_Permalink_URL__Facebook_Ads IS NOT NULL"""
 actdf = pdq.read_gbq(sql,
     project_id=env.CLIENT_PROJECT,
     progress_bar_type='tqdm',
@@ -437,11 +480,12 @@ for i, row in imgdf.iterrows():
 viddf = datadf[~datadf['Ad_Creative_Video_ID__Facebook_Ads'].isna()&~datadf['Ad_Creative_Video_Permalink_URL__Facebook_Ads'].isna()]
 # %%
 from yt_dlp import YoutubeDL
+from time import sleep
 video_path = '../data/videos'
 done_vids = [u.split('.')[0] for u in os.listdir('../data/videos')]
-for i, row in viddf.iterrows():
-    vid_url = row['Ad_Creative_Video_Permalink_URL__Facebook_Ads']
-    vid_hash = row['Ad_Creative_Video_ID__Facebook_Ads']
+for i, row in actdf.iterrows():
+    vid_url = row['video_url']
+    vid_hash = row['video_id']
     if vid_hash in done_vids: continue
     else: sleep(1)
     ydl_opts = {

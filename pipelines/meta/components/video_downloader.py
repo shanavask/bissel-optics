@@ -1,10 +1,11 @@
 from kfp import dsl
 
 @dsl.component(
-        base_image="python:3.12", 
+        base_image="python:3.12",
         packages_to_install=["google-cloud-logging==3.16.1", "google-cloud-aiplatform==1.160.0",
             "pandas-gbq==0.35.0", "google-cloud-bigquery-storage==2.39.0", "kfp==2.17.0",
-            "pillow==11.3.0", "moviepy==2.2.1", "yt-dlp==2026.7.4"])
+            "pillow==11.3.0", "moviepy==2.2.1", "yt-dlp==2026.7.4", "facebook-business==26.0.1",
+            "google-cloud-secret-manager==2.30.0",])
 def download_videos(
     meta_table: str,
     meta_video_table: str,
@@ -25,8 +26,9 @@ def download_videos(
         project (str): Google Cloud project ID.
         meta_video_path (str): Path in the storage bucket where videos will be stored.
     """
-    
+
     import os
+    import requests
     import pandas_gbq as pdq
     import pandas as pd
     from PIL import Image
@@ -35,18 +37,52 @@ def download_videos(
     from google.cloud import storage
     from time import sleep
     import logging
+    import json
 
+    from google.cloud import secretmanager
     from yt_dlp import YoutubeDL
     from moviepy.video.io.VideoFileClip import VideoFileClip
+    from facebook_business.api import FacebookAdsApi
+    from facebook_business.adobjects.advideo import AdVideo
 
     logging.basicConfig(level=logging.DEBUG)
+
+    secret_name = "bissel-meta-token"
+    # get the API key from secrets
+    client = secretmanager.SecretManagerServiceClient()
+    name = f"projects/{project}/secrets/{secret_name}/versions/latest"
+    response = client.access_secret_version(request={"name": name})
+    payload = response.payload.data.decode("UTF-8")
+    key = json.loads(payload)    
+    access_token = key['access_token']
+
+    FacebookAdsApi.init(access_token=access_token)
+
+    page_id = "38870020038"  # BISSELL Page
+    api = FacebookAdsApi.get_default_api()
+    accounts_resp = api.call("GET", ("me", "accounts"), params={"fields": "id,name,access_token"})
+    page_tokens = {p["id"]: p["access_token"] for p in accounts_resp.json().get("data", [])}
+    page_token = page_tokens[page_id]
+
+    FacebookAdsApi.init(access_token=page_token)
+
+    def download_via_api(video_id, local_path):
+        """Fallback for when yt-dlp can't scrape the permalink: pull the direct
+        `source` URL from the Marketing API and download that instead."""
+        source_url = AdVideo(video_id).api_get(fields=['source']).get('source')
+        if not source_url:
+            raise ValueError(f"No source url returned for video {video_id}")
+        response = requests.get(source_url)
+        response.raise_for_status()
+        with open(local_path, 'wb') as f:
+            f.write(response.content)
 
     sql = f"""
         SELECT DISTINCT Creative_ID__Facebook_Ads AS creative_id, Ad_Creative_Video_ID__Facebook_Ads AS video_id,
             Ad_Creative_Video_Permalink_URL__Facebook_Ads AS video_url
         FROM `{client_project}.{client_dataset}.{meta_table}`
         LEFT JOIN `{client_project}.{optics_dataset}.{meta_video_table}` AS meta
-        ON meta.video_id = Ad_Creative_Video_ID__Facebook_Ads
+        ON meta.video_id = Ad_Creative_Video_ID__Facebook_Ads AND meta.creative_id = Creative_ID__Facebook_Ads
         WHERE meta.video_id IS NULL
         AND Ad_Creative_Video_ID__Facebook_Ads IS NOT NULL
         AND Ad_Creative_Video_Permalink_URL__Facebook_Ads IS NOT NULL
@@ -95,9 +131,14 @@ def download_videos(
                     ydl.download([video_url])
                 done_vids.append(video_id)
             except Exception as e:
-                logging.error(f"Error downloading video {video_id}: {e}")
-                error_state[video_id] = {'error': str(e), 'attempt_count': attempt_count + 1, 'logged_at': dt.now().strftime('%Y-%m-%d %H:%M:%S')}
-                continue
+                logging.warning(f"yt-dlp failed for {video_id}, retrying via Marketing API: {e}")
+                try:
+                    download_via_api(video_id, f'/tmp/{video_id}.mp4')
+                    done_vids.append(video_id)
+                except Exception as api_e:
+                    logging.error(f"Error downloading video {video_id}: {api_e}")
+                    error_state[video_id] = {'error': str(api_e), 'attempt_count': attempt_count + 1, 'logged_at': dt.now().strftime('%Y-%m-%d %H:%M:%S')}
+                    continue
 
             blob = bucket.blob(f'{meta_video_path}/{video_id}.mp4')
             if not blob.name in down_vids: blob.upload_from_filename(f'/tmp/{video_id}.mp4')

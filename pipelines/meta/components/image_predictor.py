@@ -13,7 +13,7 @@ def predict_images(
     model: str,
     storage_bucket: str,
     channel: str = "meta",
-    location: str = "us-central1"
+    location: str = "global"
 ) -> str:
     """
     Analyzes and classifies ad creative assets using a generative AI model.
